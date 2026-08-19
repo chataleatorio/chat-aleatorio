@@ -1,7 +1,7 @@
 {
   "name": "video-chat-app",
   "version": "1.0.0",
-  "description": "Videollamadas aleatorias con pago unico",
+  "description": "Videollamadas aleatorias con acceso por contraseña",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +9,6 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5",
-    "stripe": "^16.2.0",
     "dotenv": "^16.4.5",
     "cookie-parser": "^1.4.6"
   }
