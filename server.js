@@ -64,8 +64,8 @@ app.get('/chat', requireAuth, (req, res) => {
 });
 
 // --------- Emparejamiento aleatorio + señalización WebRTC ---------
-let waitingUser = null; // socket.id en espera de pareja
-const partners = new Map(); // socket.id -> partner socket.id
+let waitingUser = null;
+const partners = new Map();
 
 function cleanupSocket(socketId) {
   if (waitingUser === socketId) waitingUser = null;
@@ -91,7 +91,7 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   socket.on('find-partner', () => {
-    cleanupSocket(socket.id); // por si ya tenía pareja/estaba en espera
+    cleanupSocket(socket.id);
 
     if (waitingUser && waitingUser !== socket.id && io.sockets.sockets.get(waitingUser)) {
       const partnerId = waitingUser;
@@ -100,7 +100,6 @@ io.on('connection', (socket) => {
       partners.set(socket.id, partnerId);
       partners.set(partnerId, socket.id);
 
-      // El que ya estaba esperando inicia la oferta WebRTC
       io.to(partnerId).emit('matched', { initiator: true });
       io.to(socket.id).emit('matched', { initiator: false });
     } else {
@@ -119,7 +118,6 @@ io.on('connection', (socket) => {
   socket.on('report', () => {
     const partnerId = partners.get(socket.id);
     console.log(`[REPORTE] ${socket.id} reportó a ${partnerId || 'desconocido'} — ${new Date().toISOString()}`);
-    // Aquí puedes agregar tu propia lógica: guardar en base de datos, avisar por email, etc.
     cleanupSocket(socket.id);
     socket.emit('left-chat');
   });
