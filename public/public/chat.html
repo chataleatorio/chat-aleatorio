@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Video Chat</title>
+<style>
+  :root { --accent: #4f9dff; --bg: #0f1115; --panel: #171a21; --text: #e7e9ee; --muted: #8a90a0; --danger: #e05656; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+
+  .videos {
+    position: relative; width: 100vw; height: 100vh; background: #000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #remoteVideo { width: 100%; height: 100%; object-fit: cover; background: #000; }
+  #localVideo {
+    position: absolute; bottom: 100px; right: 16px; width: 110px; height: 150px;
+    object-fit: cover; border-radius: 10px; border: 2px solid #2a2e38; background: #000;
+  }
+
+  #status-banner {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(23,26,33,0.9); padding: 8px 18px; border-radius: 30px; font-size: 13px;
+    color: var(--muted); display: none;
+  }
+
+  .controls {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; gap: 10px; justify-content: center; padding: 16px;
+    background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+  }
+  .controls button {
+    padding: 12px 20px; border: none; border-radius: 30px; font-size: 14px; font-weight: 600;
+    cursor: pointer; color: #fff;
+  }
+  #nextBtn { background: var(--accent); }
+  #reportBtn { background: var(--danger); }
+  #leaveBtn { background: #3a3f4b; }
+
+  #welcome-overlay {
+    position: fixed; inset: 0; background: rgba(15,17,21,0.97); z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 24px;
+  }
+  #welcome-overlay h2 { margin: 0 0 10px; font-size: 20px; }
+  #welcome-overlay p { color: var(--muted); font-size: 14px; max-width: 320px; margin: 0 0 20px; }
+  #welcome-overlay button {
+    padding: 14px 30px; border: none; border-radius: 30px; background: var(--accent);
+    color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+  <div id="welcome-overlay">
+    <h2>Listo para conectar</h2>
+    <p>Vas a hablar con alguien al azar por video. Sé respetuoso — puedes saltar o reportar en cualquier momento.</p>
+    <button id="startBtn">Empezar a buscar</button>
+  </div>
+
+  <div class="videos">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <div id="status-banner"></div>
+  </div>
+
+  <div class="controls">
+    <button id="nextBtn">Siguiente</button>
+    <button id="reportBtn">Reportar</button>
+    <button id="leaveBtn">Salir</button>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const statusBanner = document.getElementById('status-banner');
+    const welcomeOverlay = document.getElementById('welcome-overlay');
+
+    let localStream = null;
+    let pc = null;
+    let isInitiator = false;
+
+    const rtcConfig = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    };
+
+    function setStatus(text) {
+      if (!text) {
+        statusBanner.style.display = 'none';
+        return;
+      }
+      statusBanner.textContent = text;
+      statusBanner.style.display = 'block';
+    }
+
+    async function getLocalStream() {
+      if (localStream) return localStream;
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+      return localStream;
+    }
+
+    function createPeerConnection() {
+      pc = new RTCPeerConnection(rtcConfig);
+
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+      pc.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
+        setStatus(null);
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('signal', { type: 'ice', candidate: event.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+          remoteVideo.srcObject = null;
+        }
+      };
+    }
+
+    async function startCall() {
+      createPeerConnection();
+      if (isInitiator) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('signal', { type: 'offer', sdp: offer });
+      }
+    }
+
+    socket.on('waiting', () => {
+      setStatus('Buscando a alguien disponible...');
+    });
+
+    socket.on('matched', async ({ initiator }) => {
+      isInitiator = initiator;
+      setStatus('Conectando...');
+      await startCall();
+    });
+
+    socket.on('signal', async (data) => {
+      if (!pc) return;
+
+      if (data.type === 'offer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('signal', { type: 'answer', sdp: answer });
+      } else if (data.type === 'answer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      } else if (data.type === 'ice') {
+        try {
+          await pc.addIceCandidate(data.candidate);
+        } catch (e) {
+          console.warn('Error agregando ICE candidate', e);
+        }
+      }
+    });
+
+    socket.on('partner-left', () => {
+      setStatus('La otra persona se desconectó. Buscando alguien nuevo...');
+      cleanupCall();
+      socket.emit('find-partner');
+    });
+
+    socket.on('left-chat', () => {
+      cleanupCall();
+      setStatus('Saliste del chat.');
+    });
+
+    function cleanupCall() {
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      remoteVideo.srcObject = null;
+    }
+
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      try {
+        await getLocalStream();
+        welcomeOverlay.style.display = 'none';
+        socket.emit('find-partner');
+      } catch (e) {
+        alert('Necesitamos permiso de cámara y micrófono para continuar.');
+      }
+    });
+
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      cleanupCall();
+      setStatus('Buscando a alguien nuevo...');
+      socket.emit('find-partner');
+    });
+
+    document.getElementById('reportBtn').addEventListener('click', () => {
+      if (confirm('¿Reportar a esta persona y salir de la llamada?')) {
+        socket.emit('report');
+        cleanupCall();
+      }
+    });
+
+    document.getElementById('leaveBtn').addEventListener('click', () => {
+      socket.emit('leave-chat');
+      cleanupCall();
+      window.location.href = '/';
+    });
+  </script>
+</body>
+</html>
